@@ -1,0 +1,34 @@
+# Configuration for Face Search + Inpainting Project
+
+encoder:
+  batch_size: 32
+  epochs: 10
+  lr: 0.001
+  weight_decay: 0.0001
+  embedding_dim: 128
+  num_attributes: 40
+
+unet:
+  batch_size: 8
+  epochs: 15
+  lr: 0.001
+  mask_size_range: [40, 100]
+
+data:
+  image_size: 256
+  celeba_path: "data/CelebAMask-HQ"
+  ffhq_path: "data/FFHQ"
+  train_split: 0.8
+  val_split: 0.1
+  test_split: 0.1
+  gallery_size: 70000
+  num_workers: 4
+
+training:
+  checkpoint_dir: "checkpoints"
+  log_dir: "runs"
+  save_every: 5
+
+search:
+  top_k: 5
+  use_faiss: true
