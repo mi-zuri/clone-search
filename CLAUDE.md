@@ -6,13 +6,6 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 Python 3.11.3 project (Computer Vision - Project 3). Currently in early setup phase.
 
-## Environment
+## CLI commands
 
-```bash
-# Activate virtual environment
-source .venv/bin/activate
-```
-
-## Code Style
-
-- Formatter: Black (configured in PyCharm)
+Use python3 instead of python when testing. You can also execute pytest

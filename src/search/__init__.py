@@ -1,1 +1,1 @@
-from .engine import SearchEngine
+"""Search engine and indexing."""

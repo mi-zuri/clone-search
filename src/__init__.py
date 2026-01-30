@@ -1,1 +1,1 @@
-# Face Search + Inpainting Project
+"""Face Search + Inpainting Project."""

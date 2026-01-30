@@ -56,3 +56,4 @@ Thumbs.db
 # Secrets
 .env
 kaggle.json
+CLAUDE.md

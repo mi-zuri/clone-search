@@ -1,34 +1,69 @@
 # Configuration for Face Search + Inpainting Project
+# Optimized for M1 MacBook Air (8GB) with MPS backend
 
 encoder:
   batch_size: 32
-  epochs: 10
+  gradient_accumulation_steps: 8  # effective batch = 256 for SimCLR
+  epochs: 6
   lr: 0.001
-  weight_decay: 0.0001
-  embedding_dim: 128
+  weight_decay: 0.01
+  embedding_dim: 64
+  projection_dim: 64  # SimCLR projection head output
   num_attributes: 40
+  # SimCLR parameters
+  simclr_temperature: 0.25
+  # Loss weights (calibrated to balance magnitudes ~0.5-1.0 each)
+  simclr_loss_weight: 0.5
+  attribute_loss_weight: 1.0
+  # Early stopping
+  early_stopping_patience: 2
 
 unet:
   batch_size: 8
-  epochs: 15
-  lr: 0.001
-  mask_size_range: [40, 100]
+  gradient_accumulation_steps: 2  # effective batch = 16
+  epochs: 3
+  lr: 0.0002
+  weight_decay: 0.01
+  # Loss weights (L_total = L1 + MS-SSIM, no adversarial/perceptual)
+  l1_weight: 1.0
+  msssim_weight: 0.2
+  mask_weight: 5.0  # masked regions weighted 5× higher
+  # Mask generation
+  semantic_mask_ratio: 0.5  # 50% semantic masks, 50% random rectangles
+  max_random_mask_area: 0.4  # random masks < 40% of image
+  # Early stopping
+  early_stopping_patience: 2
 
 data:
   image_size: 256
-  celeba_path: "data/CelebAMask-HQ"
-  ffhq_path: "data/FFHQ"
-  train_split: 0.8
-  val_split: 0.1
-  test_split: 0.1
-  gallery_size: 70000
-  num_workers: 4
+  celeba_path: "data/celeba"
+  celeba_masks_path: "data/celeba_masks"
+  celeba_attr_path: "data/CelebAMask-HQ-attribute-anno.txt"
+  ffhq_path: "data/ffhq"
+  # Data splits (CelebA-HQ: 30k total)
+  celeba_train: 15000
+  celeba_val: 5000
+  celeba_test: 10000
+  # FFHQ usage
+  ffhq_train_subset: 5000  # random subset for SimCLR training
+  ffhq_total: 50000  # full gallery
+  # Batch composition
+  celeba_batch_ratio: 0.75  # 75% CelebA + 25% FFHQ per batch
+  # M1 MPS optimized
+  num_workers: 2
+  dataloader_spawn_method: "spawn"
 
 training:
   checkpoint_dir: "checkpoints"
   log_dir: "runs"
-  save_every: 5
+  save_every: 1  # save every epoch
+  mixed_precision: false  # MPS has limited float16 support
+  gradient_clip_norm: 1.0
+  warmup_epochs: 1
+  warmup_start_lr: 0.00001  # 1e-5
+  scheduler: "cosine_annealing"
 
 search:
   top_k: 5
   use_faiss: true
+  gallery_size: 80000  # 30k CelebA + 50k FFHQ

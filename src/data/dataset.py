@@ -1,432 +1,401 @@
-"""Dataset classes for CelebAMask-HQ and FFHQ."""
+"""Dataset classes for CelebA-HQ, FFHQ, and combined training."""
 
-import os
 from pathlib import Path
-from typing import Optional, Tuple, List, Dict
+from typing import Any, Callable, Optional, Protocol, Union
 
 import numpy as np
 import torch
-from torch.utils.data import Dataset
 from PIL import Image
-import pandas as pd
-
-from .augmentations import get_train_transforms, get_val_transforms, get_inpaint_transforms
-
-
-# CelebA attribute names in order
-CELEBA_ATTRIBUTES = [
-    '5_o_Clock_Shadow', 'Arched_Eyebrows', 'Attractive', 'Bags_Under_Eyes',
-    'Bald', 'Bangs', 'Big_Lips', 'Big_Nose', 'Black_Hair', 'Blond_Hair',
-    'Blurry', 'Brown_Hair', 'Bushy_Eyebrows', 'Chubby', 'Double_Chin',
-    'Eyeglasses', 'Goatee', 'Gray_Hair', 'Heavy_Makeup', 'High_Cheekbones',
-    'Male', 'Mouth_Slightly_Open', 'Mustache', 'Narrow_Eyes', 'No_Beard',
-    'Oval_Face', 'Pale_Skin', 'Pointy_Nose', 'Receding_Hairline',
-    'Rosy_Cheeks', 'Sideburns', 'Smiling', 'Straight_Hair', 'Wavy_Hair',
-    'Wearing_Earrings', 'Wearing_Hat', 'Wearing_Lipstick', 'Wearing_Necklace',
-    'Wearing_Necktie', 'Young'
-]
-
-# Semantic mask parts for inpainting
-MASK_PARTS = {
-    'skin': 1,
-    'l_brow': 2,
-    'r_brow': 3,
-    'l_eye': 4,
-    'r_eye': 5,
-    'eye_g': 6,  # eyeglasses
-    'l_ear': 7,
-    'r_ear': 8,
-    'ear_r': 9,  # earring
-    'nose': 10,
-    'mouth': 11,
-    'u_lip': 12,
-    'l_lip': 13,
-    'neck': 14,
-    'neck_l': 15,  # necklace
-    'cloth': 16,
-    'hair': 17,
-    'hat': 18
-}
-
-# Parts to use for inpainting masks
-INPAINT_PARTS = ['l_eye', 'r_eye', 'l_brow', 'r_brow', 'nose', 'mouth', 'u_lip', 'l_lip']
+from PIL.Image import Resampling
+from torch.utils.data import Dataset
 
 
-class CelebAMaskHQDataset(Dataset):
-    """CelebAMask-HQ dataset for face attribute classification and inpainting."""
+class TransformableDataset(Protocol):
+    """Protocol for datasets with a transform attribute."""
+
+    transform: Optional[Callable]
+
+    def __len__(self) -> int: ...
+    def __getitem__(self, idx: int) -> dict[str, Any]: ...
+
+from .augmentations import get_val_augmentations
+
+
+class CelebADataset(Dataset):
+    """CelebA-HQ dataset with attributes and optional masks.
+
+    Attributes:
+        root: Path to celeba images (e.g., data/celeba)
+        attr_path: Path to CelebAMask-HQ-attribute-anno.txt
+        masks_root: Optional path to semantic masks (e.g., data/celeba_masks)
+        transform: Image transformation pipeline
+        indices: Optional list of indices to use (for train/val/test splits)
+    """
+
+    # All 40 CelebA-HQ attributes
+    ATTRIBUTE_NAMES = [
+        "5_o_Clock_Shadow",
+        "Arched_Eyebrows",
+        "Attractive",
+        "Bags_Under_Eyes",
+        "Bald",
+        "Bangs",
+        "Big_Lips",
+        "Big_Nose",
+        "Black_Hair",
+        "Blond_Hair",
+        "Blurry",
+        "Brown_Hair",
+        "Bushy_Eyebrows",
+        "Chubby",
+        "Double_Chin",
+        "Eyeglasses",
+        "Goatee",
+        "Gray_Hair",
+        "Heavy_Makeup",
+        "High_Cheekbones",
+        "Male",
+        "Mouth_Slightly_Open",
+        "Mustache",
+        "Narrow_Eyes",
+        "No_Beard",
+        "Oval_Face",
+        "Pale_Skin",
+        "Pointy_Nose",
+        "Receding_Hairline",
+        "Rosy_Cheeks",
+        "Sideburns",
+        "Smiling",
+        "Straight_Hair",
+        "Wavy_Hair",
+        "Wearing_Earrings",
+        "Wearing_Hat",
+        "Wearing_Lipstick",
+        "Wearing_Necklace",
+        "Wearing_Necktie",
+        "Young",
+    ]
+
+    # Semantic mask regions available in CelebA-HQ
+    MASK_REGIONS = [
+        "skin",
+        "nose",
+        "l_eye",
+        "r_eye",
+        "l_brow",
+        "r_brow",
+        "l_ear",
+        "r_ear",
+        "ear_r",  # alternative naming
+        "mouth",
+        "u_lip",
+        "l_lip",
+        "hair",
+        "hat",
+        "neck",
+        "cloth",
+    ]
 
     def __init__(
         self,
-        root: str,
-        split: str = 'train',
+        root: str | Path,
+        attr_path: str | Path,
+        masks_root: Optional[str | Path] = None,
+        transform: Optional[Callable] = None,
+        indices: Optional[list[int]] = None,
         image_size: int = 256,
-        for_inpainting: bool = False,
-        transform=None
     ):
-        """Initialize CelebAMask-HQ dataset.
-
-        Args:
-            root: Path to CelebAMask-HQ directory
-            split: One of 'train', 'val', 'test'
-            image_size: Target image size
-            for_inpainting: If True, returns mask for inpainting
-            transform: Optional custom transform
-        """
         self.root = Path(root)
-        self.split = split
+        self.masks_root = Path(masks_root) if masks_root else None
+        self.transform = transform or get_val_augmentations(image_size)
         self.image_size = image_size
-        self.for_inpainting = for_inpainting
 
-        # Set up transforms
-        if transform is not None:
-            self.transform = transform
-        elif for_inpainting:
-            self.transform = get_inpaint_transforms(image_size, is_train=(split == 'train'))
-        elif split == 'train':
-            self.transform = get_train_transforms(image_size)
-        else:
-            self.transform = get_val_transforms(image_size)
+        # Parse attribute file
+        self.samples = []
+        self._parse_attributes(attr_path)
 
-        # Find image directory
-        self.img_dir = self._find_img_dir()
-        self.mask_dir = self._find_mask_dir()
+        # Filter by indices if provided
+        if indices is not None:
+            self.samples = [self.samples[i] for i in indices]
 
-        # Load attributes
-        self.attributes = self._load_attributes()
+    def _parse_attributes(self, attr_path: str | Path) -> None:
+        """Parse CelebAMask-HQ-attribute-anno.txt.
 
-        # Get image list and split
-        self.image_ids = self._get_split_ids()
+        Format:
+        - Line 1: total count
+        - Line 2: attribute names (space-separated)
+        - Lines 3+: filename  attr1 attr2 ... (double-space between name and attrs)
+        """
+        with open(attr_path, "r") as f:
+            lines = f.readlines()
 
-    def _find_img_dir(self) -> Path:
-        """Find the image directory in the dataset."""
-        # Common locations
-        candidates = [
-            self.root / 'CelebA-HQ-img',
-            self.root / 'CelebAMask-HQ' / 'CelebA-HQ-img',
-            self.root / 'img',
-            self.root / 'images',
-        ]
-        for path in candidates:
-            if path.exists():
-                return path
-        # Fallback: search for jpg files
-        for path in self.root.rglob('*.jpg'):
-            return path.parent
-        raise FileNotFoundError(f"Could not find image directory in {self.root}")
+        # Skip header lines (count and attribute names)
+        for line in lines[2:]:
+            line = line.strip()
+            if not line:
+                continue
 
-    def _find_mask_dir(self) -> Optional[Path]:
-        """Find the mask directory in the dataset."""
-        candidates = [
-            self.root / 'CelebAMask-HQ-mask-anno',
-            self.root / 'CelebAMask-HQ' / 'CelebAMask-HQ-mask-anno',
-            self.root / 'mask',
-            self.root / 'masks',
-        ]
-        for path in candidates:
-            if path.exists():
-                return path
-        return None
+            # Double-space separates filename from attributes
+            parts = line.split("  ")
+            filename = parts[0].strip()
+            attr_values = list(map(int, parts[1].split()))
 
-    def _load_attributes(self) -> Optional[pd.DataFrame]:
-        """Load attribute annotations."""
-        candidates = [
-            self.root / 'CelebA-HQ-attribute-anno.txt',
-            self.root / 'CelebAMask-HQ' / 'CelebA-HQ-attribute-anno.txt',
-            self.root / 'list_attr_celeba.txt',
-        ]
+            # Convert -1/1 to 0/1 for BCE loss
+            attr_values = [(v + 1) // 2 for v in attr_values]
 
-        for attr_file in candidates:
-            if attr_file.exists():
-                # Check if first line is count or header
-                with open(attr_file, 'r') as f:
-                    first_line = f.readline().strip()
+            # Get image ID from filename (e.g., "123.jpg" -> 123)
+            image_id = int(filename.split(".")[0])
 
-                try:
-                    int(first_line)
-                    # Standard format: count on line 1, header on line 2
-                    skiprows = 2
-                except ValueError:
-                    # No count line, header is on line 1
-                    skiprows = 1
+            self.samples.append(
+                {
+                    "filename": filename,
+                    "image_id": image_id,
+                    "attributes": attr_values,
+                }
+            )
 
-                # Read with explicit column names (header has 40 attrs, data has 41 cols)
-                df = pd.read_csv(
-                    attr_file,
-                    sep=r'\s+',
-                    skiprows=skiprows,
-                    header=None,
-                    names=['filename'] + CELEBA_ATTRIBUTES,
-                    index_col='filename'
-                )
+    def _get_subfolder(self, image_id: int) -> str:
+        """Get subfolder for image ID (images are grouped in folders of 1000)."""
+        return str(image_id // 1000)
 
-                # Convert -1/1 to 0/1
-                df = (df + 1) // 2
+    def _load_masks(self, image_id: int, subfolder: str) -> Optional[torch.Tensor]:
+        """Load and combine semantic masks for the given image.
 
-                return df
-
-        return None
-
-    def _get_split_ids(self) -> List[int]:
-        """Get image IDs for the current split."""
-        # Get all image files
-        all_images = sorted(self.img_dir.glob('*.jpg')) + sorted(self.img_dir.glob('*.png'))
-        total = len(all_images)
-
-        # Extract IDs (assuming filenames like '00000.jpg' or similar)
-        ids = []
-        for img_path in all_images:
-            try:
-                img_id = int(img_path.stem)
-                ids.append(img_id)
-            except ValueError:
-                ids.append(img_path.stem)
-
-        ids = sorted(ids) if all(isinstance(i, int) for i in ids) else ids
-
-        # Split: 80% train, 10% val, 10% test
-        n_train = int(total * 0.8)
-        n_val = int(total * 0.1)
-
-        if self.split == 'train':
-            return ids[:n_train]
-        elif self.split == 'val':
-            return ids[n_train:n_train + n_val]
-        else:  # test
-            return ids[n_train + n_val:]
-
-    def _get_semantic_mask(self, idx: int) -> Optional[np.ndarray]:
-        """Load and combine semantic masks for inpainting."""
-        if self.mask_dir is None:
+        Returns a single binary mask where 1 indicates any semantic region.
+        """
+        if self.masks_root is None:
             return None
 
-        # Masks are organized in folders 0, 1, 2, ... (500 images each)
-        folder_idx = idx // 2000
-        mask_folder = self.mask_dir / str(folder_idx)
+        combined_mask = None
+        mask_folder = self.masks_root / subfolder
 
-        if not mask_folder.exists():
-            # Try flat structure
-            mask_folder = self.mask_dir
+        for region in self.MASK_REGIONS:
+            mask_path = mask_folder / f"{image_id:05d}_{region}.png"
+            if mask_path.exists():
+                mask = Image.open(mask_path).convert("L")
+                mask = mask.resize((self.image_size, self.image_size), Resampling.NEAREST)
+                mask_array = np.array(mask, dtype=np.float32)
+                mask_tensor = torch.from_numpy(mask_array)
+                mask_tensor = (mask_tensor > 0).float()
 
-        # Combine masks for inpainting parts
-        combined_mask = np.zeros((512, 512), dtype=np.uint8)
-
-        # Randomly select 1-3 parts to mask
-        num_parts = np.random.randint(1, 4)
-        parts_to_mask = np.random.choice(INPAINT_PARTS, size=min(num_parts, len(INPAINT_PARTS)), replace=False)
-
-        for part in parts_to_mask:
-            # Mask filename format: {idx:05d}_{part}.png
-            mask_file = mask_folder / f"{idx:05d}_{part}.png"
-            if mask_file.exists():
-                part_mask = np.array(Image.open(mask_file).convert('L'))
-                combined_mask = np.maximum(combined_mask, part_mask)
+                if combined_mask is None:
+                    combined_mask = mask_tensor
+                else:
+                    combined_mask = torch.maximum(combined_mask, mask_tensor)
 
         return combined_mask
 
-    def _generate_random_mask(self, height: int, width: int) -> np.ndarray:
-        """Generate random rectangle mask for inpainting."""
-        mask = np.zeros((height, width), dtype=np.uint8)
-
-        # Random rectangle size
-        h = np.random.randint(40, min(100, height // 2))
-        w = np.random.randint(40, min(100, width // 2))
-
-        # Random position (centered in face region)
-        center_y, center_x = height // 2, width // 2
-        y = np.random.randint(max(0, center_y - h), min(height - h, center_y + h // 2))
-        x = np.random.randint(max(0, center_x - w), min(width - w, center_x + w // 2))
-
-        mask[y:y+h, x:x+w] = 255
-
-        return mask
-
     def __len__(self) -> int:
-        return len(self.image_ids)
+        return len(self.samples)
 
-    def __getitem__(self, idx: int) -> Dict[str, torch.Tensor]:
-        img_id = self.image_ids[idx]
+    def __getitem__(self, idx: int) -> dict:
+        sample = self.samples[idx]
+        image_id = sample["image_id"]
+        subfolder = self._get_subfolder(image_id)
 
         # Load image
-        if isinstance(img_id, int):
-            img_path = self.img_dir / f"{img_id}.jpg"
-            if not img_path.exists():
-                img_path = self.img_dir / f"{img_id:05d}.jpg"
-            if not img_path.exists():
-                img_path = self.img_dir / f"{img_id}.png"
-        else:
-            img_path = self.img_dir / f"{img_id}.jpg"
+        image_path = self.root / subfolder / sample["filename"]
+        image = Image.open(image_path).convert("RGB")
 
-        image = np.array(Image.open(img_path).convert('RGB'))
+        # Apply transforms
+        if self.transform:
+            image = self.transform(image)
 
-        result = {}
+        result = {
+            "image": image,
+            "attributes": torch.tensor(sample["attributes"], dtype=torch.float32),
+            "path": str(image_path),
+            "image_id": image_id,
+        }
 
-        if self.for_inpainting:
-            # Get mask for inpainting
-            mask = self._get_semantic_mask(img_id if isinstance(img_id, int) else idx)
-            if mask is None or mask.max() == 0:
-                mask = self._generate_random_mask(image.shape[0], image.shape[1])
-
-            # Resize mask to match image
-            mask_pil = Image.fromarray(mask).resize((image.shape[1], image.shape[0]), Image.NEAREST)
-            mask = np.array(mask_pil)
-
-            # Apply transforms
-            transformed = self.transform(image=image, mask=mask)
-            image_tensor = transformed['image'].float() / 255.0
-            mask_tensor = transformed['mask'].float().unsqueeze(0) / 255.0
-
-            # Create masked image
-            masked_image = image_tensor * (1 - mask_tensor)
-
-            result['image'] = image_tensor
-            result['mask'] = mask_tensor
-            result['masked_image'] = masked_image
-        else:
-            # Apply transforms for classification
-            transformed = self.transform(image=image)
-            result['image'] = transformed['image']
-
-            # Get attributes
-            if self.attributes is not None and isinstance(img_id, int):
-                try:
-                    # Try multiple filename formats
-                    candidates = [
-                        f"{img_id}.jpg",      # e.g., "1.jpg"
-                        f"{img_id - 1}.jpg",  # 0-indexed: image 00001.jpg -> attr 0.jpg
-                    ]
-                    attrs = None
-                    for filename in candidates:
-                        if filename in self.attributes.index:
-                            attrs = self.attributes.loc[filename].values
-                            break
-                    if attrs is None:
-                        # Fallback to row index
-                        attrs = self.attributes.iloc[img_id].values
-                    result['attributes'] = torch.tensor(attrs, dtype=torch.float32)
-                except (KeyError, IndexError):
-                    result['attributes'] = torch.zeros(40, dtype=torch.float32)
-            else:
-                result['attributes'] = torch.zeros(40, dtype=torch.float32)
-
-        result['idx'] = img_id if isinstance(img_id, int) else idx
+        # Optionally load masks
+        mask = self._load_masks(image_id, subfolder)
+        if mask is not None:
+            result["mask"] = mask
 
         return result
 
 
 class FFHQDataset(Dataset):
-    """FFHQ dataset for search gallery."""
+    """FFHQ dataset for unlabeled face images.
+
+    Attributes:
+        root: Path to FFHQ images (e.g., data/ffhq)
+        transform: Image transformation pipeline
+        indices: Optional list of indices to use (for subset selection)
+    """
 
     def __init__(
         self,
-        root: str,
+        root: str | Path,
+        transform: Optional[Callable] = None,
+        indices: Optional[list[int]] = None,
         image_size: int = 256,
-        transform=None,
-        max_images: Optional[int] = None
+        total_images: int = 50000,
     ):
-        """Initialize FFHQ dataset.
-
-        Args:
-            root: Path to FFHQ directory
-            image_size: Target image size
-            transform: Optional custom transform
-            max_images: Maximum number of images to use
-        """
         self.root = Path(root)
-        self.image_size = image_size
+        self.transform = transform or get_val_augmentations(image_size)
 
-        if transform is not None:
-            self.transform = transform
+        # Generate all valid indices or use provided subset
+        if indices is not None:
+            self.indices = list(indices)
         else:
-            self.transform = get_val_transforms(image_size)
+            self.indices = list(range(total_images))
 
-        # Find all images
-        self.image_paths = self._find_images(max_images)
-
-    def _find_images(self, max_images: Optional[int] = None) -> List[Path]:
-        """Find all images in the dataset."""
-        extensions = ['*.jpg', '*.png', '*.jpeg']
-        paths = []
-
-        for ext in extensions:
-            paths.extend(self.root.rglob(ext))
-
-        paths = sorted(paths)
-
-        if max_images is not None:
-            paths = paths[:max_images]
-
-        return paths
+    def _get_subfolder(self, image_id: int) -> str:
+        """Get subfolder for image ID (images are grouped in folders of 1000)."""
+        return str(image_id // 1000)
 
     def __len__(self) -> int:
-        return len(self.image_paths)
+        return len(self.indices)
 
-    def __getitem__(self, idx: int) -> Dict[str, torch.Tensor]:
-        img_path = self.image_paths[idx]
-        image = np.array(Image.open(img_path).convert('RGB'))
+    def __getitem__(self, idx: int) -> dict:
+        image_id = self.indices[idx]
+        subfolder = self._get_subfolder(image_id)
 
-        transformed = self.transform(image=image)
+        # FFHQ uses 5-digit zero-padded filenames
+        filename = f"{image_id:05d}.png"
+        image_path = self.root / subfolder / filename
+
+        image = Image.open(image_path).convert("RGB")
+
+        if self.transform:
+            image = self.transform(image)
 
         return {
-            'image': transformed['image'],
-            'idx': idx,
-            'path': str(img_path)
+            "image": image,
+            "path": str(image_path),
+            "image_id": image_id,
         }
 
 
-def get_dataloaders(
-    celeba_root: str,
-    batch_size: int = 32,
-    image_size: int = 256,
-    num_workers: int = 4,
-    for_inpainting: bool = False
-) -> Tuple[torch.utils.data.DataLoader, torch.utils.data.DataLoader, torch.utils.data.DataLoader]:
-    """Get train, val, test dataloaders for CelebAMask-HQ.
+class CombinedDataset(Dataset):
+    """Combined CelebA + FFHQ dataset with has_attributes flag.
 
-    Args:
-        celeba_root: Path to CelebAMask-HQ
-        batch_size: Batch size
-        image_size: Image size
-        num_workers: Number of workers
-        for_inpainting: If True, load masks for inpainting
-
-    Returns:
-        Tuple of (train_loader, val_loader, test_loader)
+    Used for training with mixed batches where CelebA provides
+    attribute labels and FFHQ provides additional face diversity.
     """
-    import platform
-    if platform.system() == 'Windows' and num_workers > 0:
-        print(f"Windows detected: setting num_workers=0 (was {num_workers})")
-        num_workers = 0
 
-    train_dataset = CelebAMaskHQDataset(
-        celeba_root, split='train', image_size=image_size, for_inpainting=for_inpainting
-    )
-    val_dataset = CelebAMaskHQDataset(
-        celeba_root, split='val', image_size=image_size, for_inpainting=for_inpainting
-    )
-    test_dataset = CelebAMaskHQDataset(
-        celeba_root, split='test', image_size=image_size, for_inpainting=for_inpainting
-    )
+    def __init__(
+        self,
+        celeba_dataset: CelebADataset,
+        ffhq_dataset: FFHQDataset,
+    ):
+        self.celeba = celeba_dataset
+        self.ffhq = ffhq_dataset
+        self.celeba_len = len(celeba_dataset)
+        self.ffhq_len = len(ffhq_dataset)
+        self._transform: Optional[Callable] = None
 
-    train_loader = torch.utils.data.DataLoader(
-        train_dataset,
-        batch_size=batch_size,
-        shuffle=True,
-        num_workers=num_workers,
-        pin_memory=True
-    )
-    val_loader = torch.utils.data.DataLoader(
-        val_dataset,
-        batch_size=batch_size,
-        shuffle=False,
-        num_workers=num_workers,
-        pin_memory=True
-    )
-    test_loader = torch.utils.data.DataLoader(
-        test_dataset,
-        batch_size=batch_size,
-        shuffle=False,
-        num_workers=num_workers,
-        pin_memory=True
-    )
+    @property
+    def transform(self) -> Optional[Callable]:
+        """Get current transform (from underlying datasets)."""
+        return self._transform
 
-    return train_loader, val_loader, test_loader
+    @transform.setter
+    def transform(self, value: Optional[Callable]) -> None:
+        """Set transform on both underlying datasets."""
+        self._transform = value
+        self.celeba.transform = value
+        self.ffhq.transform = value
+
+    def __len__(self) -> int:
+        return self.celeba_len + self.ffhq_len
+
+    def __getitem__(self, idx: int) -> dict:
+        if idx < self.celeba_len:
+            # CelebA sample - has attributes
+            sample = self.celeba[idx]
+            sample["has_attributes"] = True
+            sample["source"] = "celeba"
+        else:
+            # FFHQ sample - no attributes
+            ffhq_idx = idx - self.celeba_len
+            sample = self.ffhq[ffhq_idx]
+            sample["has_attributes"] = False
+            sample["source"] = "ffhq"
+            # Add dummy attributes for batch collation
+            sample["attributes"] = torch.zeros(40, dtype=torch.float32)
+
+        return sample
+
+    def get_sampler_weights(self, celeba_ratio: float = 0.75) -> torch.Tensor:
+        """Get sampling weights for WeightedRandomSampler.
+
+        Args:
+            celeba_ratio: Target ratio of CelebA samples per batch (default 0.75)
+
+        Returns:
+            Tensor of weights for each sample
+        """
+        # Calculate weights to achieve desired ratio
+        # If we want 75% CelebA and have N_c CelebA and N_f FFHQ samples:
+        # w_c * N_c / (w_c * N_c + w_f * N_f) = 0.75
+        # Setting w_f = 1: w_c * N_c = 3 * N_f, so w_c = 3 * N_f / N_c
+        ffhq_weight = 1.0
+        celeba_weight = (celeba_ratio / (1 - celeba_ratio)) * (
+            self.ffhq_len / self.celeba_len
+        )
+
+        weights = torch.zeros(len(self))
+        weights[: self.celeba_len] = celeba_weight
+        weights[self.celeba_len :] = ffhq_weight
+
+        return weights
+
+
+class SimCLRWrapper(Dataset):
+    """Wrapper that returns two augmented views for SimCLR training.
+
+    Wraps any dataset and applies the SimCLR augmentation pipeline twice
+    to generate positive pairs for contrastive learning.
+    """
+
+    def __init__(
+        self,
+        dataset: Union[CelebADataset, FFHQDataset, CombinedDataset],
+        simclr_transform: Callable,
+    ):
+        self.dataset = dataset
+        self.simclr_transform = simclr_transform
+        # Store original transform for reference
+        self._original_transform = dataset.transform
+        # Disable transform to get raw PIL images
+        dataset.transform = None
+
+    def __len__(self) -> int:
+        return len(self.dataset)
+
+    def __getitem__(self, idx: int) -> dict:
+        # Get raw sample without transforms
+        sample = self.dataset[idx]
+        image = sample["image"]
+
+        # If image is already a tensor (from previous transform), convert back
+        if isinstance(image, torch.Tensor):
+            # This shouldn't happen with our setup, but handle it
+            raise ValueError("SimCLRWrapper expects raw PIL images from dataset")
+
+        # Apply SimCLR augmentation twice for two views
+        view1 = self.simclr_transform(image)
+        view2 = self.simclr_transform(image)
+
+        # Build result with both views
+        result = {
+            "view1": view1,
+            "view2": view2,
+            "path": sample.get("path", ""),
+            "image_id": sample.get("image_id", idx),
+        }
+
+        # Preserve other fields
+        if "attributes" in sample:
+            result["attributes"] = sample["attributes"]
+        if "has_attributes" in sample:
+            result["has_attributes"] = sample["has_attributes"]
+        if "source" in sample:
+            result["source"] = sample["source"]
+        if "mask" in sample:
+            result["mask"] = sample["mask"]
+
+        return result
