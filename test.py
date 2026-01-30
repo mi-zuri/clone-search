@@ -107,3 +107,26 @@ def inspect_latest_checkpoint():
 
 if __name__ == "__main__":
     inspect_latest_checkpoint()
+
+# import numpy as np
+# from src.search import FaceSearchEngine
+#
+# # Load engine
+# engine = FaceSearchEngine("checkpoints/gallery_index.npz")
+# print(f"Gallery size: {len(engine)}")
+#
+# # Search with random query (replace with real embedding)
+# query = np.random.randn(64).astype(np.float32)
+# query /= np.linalg.norm(query)
+#
+# # Basic search
+# results = engine.search(query, k=5)
+# for r in results:
+#     print(f"{r['path']} - similarity: {r['similarity']:.3f}")
+#
+# # Search with attribute filters
+# results = engine.search(
+#     query,
+#     k=5,
+#     attribute_filters={"Smiling": True, "Eyeglasses": False}
+# )

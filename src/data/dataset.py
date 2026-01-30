@@ -219,6 +219,8 @@ class CelebADataset(Dataset):
 class FFHQDataset(Dataset):
     """FFHQ dataset for unlabeled face images.
 
+    Scans directory for actual .png files to handle non-sequential numbering.
+
     Attributes:
         root: Path to FFHQ images (e.g., data/ffhq)
         transform: Image transformation pipeline
@@ -236,26 +238,45 @@ class FFHQDataset(Dataset):
         self.root = Path(root)
         self.transform = transform or get_val_augmentations(image_size)
 
-        # Generate all valid indices or use provided subset
-        if indices is not None:
-            self.indices = list(indices)
-        else:
-            self.indices = list(range(total_images))
+        # Scan directory for actual files instead of assuming sequential numbering
+        self.image_paths = self._scan_files(total_images)
 
-    def _get_subfolder(self, image_id: int) -> str:
-        """Get subfolder for image ID (images are grouped in folders of 1000)."""
-        return str(image_id // 1000)
+        # Apply subset selection if indices provided
+        if indices is not None:
+            self.image_paths = [self.image_paths[i] for i in indices]
+
+    def _scan_files(self, max_files: int) -> list[Path]:
+        """Scan root directory for .png files, sorted by name.
+
+        Args:
+            max_files: Maximum number of files to include
+
+        Returns:
+            Sorted list of image paths
+        """
+        image_paths = []
+
+        # Scan all subdirectories
+        for subfolder in sorted(self.root.iterdir()):
+            if not subfolder.is_dir():
+                continue
+
+            # Find all .png files in subfolder
+            for img_path in sorted(subfolder.glob("*.png")):
+                image_paths.append(img_path)
+                if len(image_paths) >= max_files:
+                    return image_paths
+
+        return image_paths
 
     def __len__(self) -> int:
-        return len(self.indices)
+        return len(self.image_paths)
 
     def __getitem__(self, idx: int) -> dict:
-        image_id = self.indices[idx]
-        subfolder = self._get_subfolder(image_id)
+        image_path = self.image_paths[idx]
 
-        # FFHQ uses 5-digit zero-padded filenames
-        filename = f"{image_id:05d}.png"
-        image_path = self.root / subfolder / filename
+        # Extract image_id from filename (e.g., "00123.png" -> 123)
+        image_id = int(image_path.stem)
 
         image = Image.open(image_path).convert("RGB")
 

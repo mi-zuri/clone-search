@@ -45,6 +45,9 @@ checkpoints/*.npy
 # TensorBoard logs
 runs/
 
+# Evaluation results
+results/
+
 # Jupyter
 .ipynb_checkpoints/
 *.ipynb_checkpoints
