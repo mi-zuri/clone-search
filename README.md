@@ -2,12 +2,26 @@
 
 Computer Vision Project - Multi-task learning for face similarity search and semantic inpainting.
 
+---
+
+![search preview](docs/images/preview.png)
+
+---
+
 ## Features
 
 - **Face Search**: Find similar faces using learned embeddings + FAISS
 - **Face Inpainting**: Remove and reconstruct facial features (eyes, nose, mouth)
 - **Attribute Prediction**: 40 CelebA binary attributes
 - **Grad-CAM**: Visual explanation of encoder attention
+
+Attribute prediction:
+
+![man with a hat](docs/images/hat.png)
+
+Matching attributes:
+
+![bald woman](docs/images/bald.png)
 
 ## Project Structure
 
