@@ -49,6 +49,48 @@ CV_clone_search/
     └── Report.md             # Project report
 ```
 
+## Running the Streamlit app
+
+The Streamlit UI entrypoint is `src/app.py`.
+
+### 1) Install dependencies
+
+```bash
+python -m venv .venv
+source .venv/bin/activate  # (Windows: .venv\Scripts\activate)
+
+pip install -r requirements.txt
+```
+
+### 2) Prepare required artifacts
+
+The app expects these files to exist:
+
+- `checkpoints/best_encoder.pt`
+- `checkpoints/gallery_index.npz`
+
+You can produce them by following the steps in [`WORKFLOW.md`](WORKFLOW.md):
+1) train the encoder (`python3 -m src.training.train_encoder`)
+2) build the gallery index (`python3 -m src.search.engine ...`)
+
+If they are missing, the app will show a message like:
+> Make sure checkpoints/best_encoder.pt and checkpoints/gallery_index.npz exist.
+
+### 3) Start the app
+
+Run Streamlit from the repository root:
+
+```bash
+streamlit run src/app.py
+```
+
+Then open the local URL printed by Streamlit (typically `http://localhost:8501`).
+
+### Notes / troubleshooting
+
+- On macOS, an OpenMP conflict between PyTorch and FAISS is worked around in the app by setting `KMP_DUPLICATE_LIB_OK=TRUE`.
+- The app will auto-select the best available device in this order: **MPS > CUDA > CPU**.
+
 ## Configuration
 
 Edit `configs/config.yaml`:
