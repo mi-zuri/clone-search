@@ -1,6 +1,6 @@
-# Face Search & Inpainting
+# Face Search
 
-Computer Vision Project - Multi-task learning for face similarity search and semantic inpainting.
+Computer Vision Project — multi-task face encoder (SimCLR contrastive learning + 40-attribute prediction) with FAISS-backed similarity search over an 80k-image gallery (CelebA-HQ + FFHQ).
 
 ---
 
@@ -10,10 +10,11 @@ Computer Vision Project - Multi-task learning for face similarity search and sem
 
 ## Features
 
-- **Face Search**: Find similar faces using learned embeddings + FAISS
-- **Face Inpainting**: Remove and reconstruct facial features (eyes, nose, mouth)
-- **Attribute Prediction**: 40 CelebA binary attributes
-- **Grad-CAM**: Visual explanation of encoder attention
+- **Face Search**: Find similar faces using learned 64-D embeddings + FAISS cosine search
+- **Attribute Prediction**: 40 CelebA binary attributes, jointly trained with the embedding head
+- **Attribute Filtering**: Filter retrieval results by predicted attributes (e.g. `Smiling=True, Eyeglasses=False`)
+- **Grad-CAM**: Visual explanation of encoder attention in the Streamlit app
+- **Evaluation suite**: Retrieval metrics, attribute accuracy, embedding visualizations, and search benchmarks
 
 Attribute prediction:
 
@@ -23,30 +24,40 @@ Matching attributes:
 
 ![bald woman](docs/images/bald.png)
 
+> **Note**: Face inpainting (e.g. masked-region reconstruction with a U-Net) is **not implemented** — the Streamlit app contains a placeholder tab only. The architecture and config leave room to add it later as a second training stage on top of the existing encoder/data pipeline.
+
 ## Project Structure
 
 ```
 CV_clone_search/
 ├── src/
 │   ├── data/
-│   │   ├── dataset.py        # CelebA & FFHQ loaders
-│   │   └── augmentations.py  # albumentations pipeline
+│   │   ├── dataset.py            # CelebA-HQ & FFHQ loaders
+│   │   └── augmentations.py      # albumentations pipeline (SimCLR views + val)
 │   ├── models/
-│   │   ├── encoder.py        # Face encoder (embedding + attributes)
-│   │   └── unet.py           # U-Net inpainter
+│   │   └── encoder.py            # Face encoder (embedding + attribute heads)
 │   ├── training/
-│   │   ├── train_encoder.py  # Encoder training script
-│   │   └── train_unet.py     # U-Net training script
+│   │   └── train_encoder.py      # SimCLR + attribute multi-task training
 │   ├── search/
-│   │   └── engine.py         # FAISS search engine
-│   └── app.py                # Streamlit GUI
+│   │   ├── engine.py             # FAISS search engine + gallery indexer
+│   │   └── splits.py             # Fixed train/val/test index splits
+│   ├── evaluation/
+│   │   ├── evaluate_retrieval.py # Retrieval metrics
+│   │   ├── evaluate_attributes.py# Per-attribute accuracy / F1
+│   │   ├── benchmark_search.py   # FAISS latency benchmarks
+│   │   └── visualize_embeddings.py
+│   ├── visualization/
+│   │   └── generate_report_figures.py
+│   └── app.py                    # Streamlit GUI
 ├── configs/
-│   └── config.yaml           # Hyperparameters
-├── data/                     # Datasets (gitignore)
-├── checkpoints/              # Model weights
-├── runs/                     # TensorBoard logs
+│   └── config.yaml               # Hyperparameters
+├── data/                         # Datasets (gitignored)
+├── checkpoints/                  # best_encoder.pt, gallery_index.npz
+├── runs/                         # TensorBoard logs
+├── results/                      # Eval outputs (JSON / CSV / figures)
 └── docs/
-    └── Report.md             # Project report
+    ├── REPORT.md / REPORT.pdf    # Project report
+    └── ...                       # Plans, system overview, grading notes
 ```
 
 ## Running the Streamlit app
@@ -91,23 +102,45 @@ Then open the local URL printed by Streamlit (typically `http://localhost:8501`)
 - On macOS, an OpenMP conflict between PyTorch and FAISS is worked around in the app by setting `KMP_DUPLICATE_LIB_OK=TRUE`.
 - The app will auto-select the best available device in this order: **MPS > CUDA > CPU**.
 
+## Evaluation
+
+After training and indexing, reproduce the numbers under `results/`:
+
+```bash
+python3 -m src.evaluation.evaluate_retrieval
+python3 -m src.evaluation.evaluate_attributes
+python3 -m src.evaluation.benchmark_search
+python3 -m src.evaluation.visualize_embeddings
+```
+
 ## Configuration
 
-Edit `configs/config.yaml`:
+Edit `configs/config.yaml`. Key sections:
 
 ```yaml
 encoder:
   batch_size: 32
-  epochs: 10
+  gradient_accumulation_steps: 8   # effective batch = 256 for SimCLR
+  epochs: 6
   lr: 0.001
-
-unet:
-  batch_size: 8
-  epochs: 15
-  lr: 0.001
+  embedding_dim: 64
+  num_attributes: 40
+  simclr_temperature: 0.25
+  simclr_loss_weight: 0.5
+  attribute_loss_weight: 1.0
 
 data:
   image_size: 256
+  celeba_train: 15000
+  celeba_val: 5000
+  celeba_test: 10000
+  ffhq_train_subset: 5000
+  celeba_batch_ratio: 0.75         # 75% CelebA + 25% FFHQ per batch
+
+search:
+  top_k: 5
+  use_faiss: true
+  gallery_size: 80000              # 30k CelebA-HQ + 50k FFHQ
 ```
 
 ## Requirements
